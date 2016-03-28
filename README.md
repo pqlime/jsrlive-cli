@@ -14,7 +14,8 @@ incorporating the music from the website version into the CLI app.
 Dependencies:
  * BeautifulSoup4
  * requests
-Optional Dependencies (futureproofing)
+ * 
+Optional Dependencies (futureproofing):
  * pyAudio
  * pydub
 
