@@ -22,6 +22,7 @@ How to install dependencies:
  * on Windows: ```python.exe -m pip install [LIBRARY_NAME]```
  * on Linux: ```pip3 install [LIBRARY_NAME]```
  * on OS X: ```i don't fucking know-- good luck```
+
 Running the program
 -
 Once all dependencies are installed, run main.py. If errors persist, it'll tell you.
