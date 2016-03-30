@@ -9,11 +9,14 @@ This program is free software. It comes without any warranty, to
 """
 
 import bs4
+import ctypes
 import unicurses
 from _curses import error as curses_error
 import locale
+import os
 import re
 import requests
+import sys
 import threading
 import time
 
@@ -71,7 +74,9 @@ def write(line, x, y, effect=0):
             uniunicurses.ERR. If it does, we can throw an
     """
     try:
-        stdscr.addstr(y, x, line.encode(encoding), effect)  # encode line for unicode support
+        stdscr.addstr(y, x, line, effect)
+    except TypeError:
+        stdscr.addstr(y, x, line, effect)  # error with win32; addstr requires a str and not byte
     except curses_error:
         pass
 
@@ -83,19 +88,24 @@ def get_key():
     """
 
     try:  # Catch non-blocking errors when attempting to fetch character
-        wch = stdscr.get_wch()
+        if sys.platform == 'win32':
+            wch = unicurses.wgetkey(stdscr)  # wgetkey is for windows support
+        else:
+            wch = stdscr.get_wch()  # get_wch is for linux ( and os x?)
     except curses_error:  # No input error --> return ''; only happens if blocking off
         return ''
     if isinstance(wch, int):  # if the keycode is a byte, it'll return an int which needs to be converted
         if unicurses.keyname(wch):  # check for a valid key descriptor
             return unicurses.keyname(wch).decode('utf-8')
-        else:  # if no valid key descriptor is available, return the character itself
-            return chr(wch)
-    elif isinstance(wch, str):  # already a string; check if KEY_ENTER or KEY_TAB as they are unparsed by keyname(wch)
+        else:  # if no valid key descriptor is available, try using the character in the next area
+            wch = chr(wch)
+    if isinstance(wch, str):  # already a string; check if KEY_ENTER or KEY_TAB as they are unparsed by keyname(wch)
         if wch == '\n':  # newline = KEY_ENTER
             return 'KEY_ENTER'
         elif wch == '\t':  # tab = KEY_TAB
             return 'KEY_TAB'
+        elif wch == '\b':  #  bs = KEY_BACKSPACE
+            return 'KEY_BACKSPACE'
         else:  # properly formatted, we can return this safely
             return wch
 
@@ -173,11 +183,12 @@ class TextInput(object):
             if len(self.__value) == 0:  # If there is no text, just render the cursor
                 write(' ', x, y, unicurses.A_REVERSE)
             else:  # If there is text, render the text alongside the cursor
-                to_write = to_write.encode(encoding)  # Encode to be unicode-safe
+                # to_write = to_write.encode(encoding)  # Encode to be unicode-safe
+
                 cpos = max(0, self.__cursor_pos - 1)  # Calculate the proper position in the text to render w/ cursor
 
                 stdscr.addnstr(y, x, to_write, cpos + 1)  # Write the text before the cursor
-                stdscr.addnstr(y, x + cpos, chr(to_write[cpos]), 1, unicurses.A_REVERSE)  # Write the cursor character
+                stdscr.addnstr(y, x + cpos, to_write[cpos], 1, unicurses.A_REVERSE)  # Write the cursor character
                 stdscr.addstr(y, x + cpos + 1, to_write[cpos + 1:])  # Write all text after the cursor mark
 
 
@@ -257,7 +268,7 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
             """
             try:
                 data = requests.request('GET', 'http://jetsetradio.live/messages/messages.xml').content  # Get the data
-                bs = bs4.BeautifulSoup(data, 'lxml')  # Parse XML data retrieved from the URL
+                bs = bs4.BeautifulSoup(data, 'html.parser')  # Parse XML data retrieved from the URL
 
                 msg = bs.find('message').text  # Parse the broadcast message out of the XML data
                 broadcaster_name = bs.find('avatar').text  # Get the broadcaster's name
@@ -268,6 +279,9 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
                 return ' ' * 72 + msg  # Append 72 blank spaces to make it truly act like a marquee
             except requests.ConnectionError:  # If there is an issue retrieving the message, use a blank string
                 return ' ' * 72
+            except:
+                global has_exception
+                has_exception = True
 
         broadcast_message = fetch_broadcast_message()  # The message to be marquee'd at the bottom of the screen
         marquee_offset = 0  # The offset of which the marquee text is currently at
@@ -312,7 +326,7 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
                 new_messages = []  # The new messages to replace the old ones with
 
                 data = requests.request('GET', 'http://jetsetradio.live/chat/messages.xml').content  # Retrieve XML data
-                bs = bs4.BeautifulSoup(data, 'lxml')  # and parse it using BeautifulSoup
+                bs = bs4.BeautifulSoup(data, 'html.parser')  # and parse it using BeautifulSoup
 
                 messages = bs.findAll('message')  # Get all XML tags named 'message'
                 messages.reverse()  # We reverse it so that we start from the last message and go forward
