@@ -195,7 +195,7 @@ class TextInput(object):
 # Audio code
 
 
-# Song fetching code
+# Tracklist fetching code
 
 songs = []  # The master list of songs: Format is [song name, song url]
 
@@ -237,7 +237,7 @@ def download_mp3_to_wav(url):
     temp.write(song_download)  # Write the song data to the temp file
     temp.close()  # Close the file and save it
 
-    os.system('./ffmpeg -loglevel panic -i %s -acodec pcm_u8 -ar 44100 temp.wav' % temp.name)  # Converts mp3 to wav
+    os.system('./ffmpeg -i %s -acodec pcm_u8 -ar 44100 ./temp.wav' % temp.name)  # Converts mp3 to wav
     os.remove(temp.name)  # Remove the mp3 temp file
 
     new_wave = wave.open('./temp.wav')  # Load the wav file
@@ -297,7 +297,14 @@ def play_song(name, url):
 
 # Main code
 
+error_msg = ''
 has_exception = False  # Will be set to true if an exception occurs, in which the user will be notified why this crashed
+
+def get_exception():
+    """
+    Fetches an exception message, regardless if a thread or not.
+    """
+
 
 try:  # Hold all code within a try-catch statement so that errors can be logged upon any crashes
     # Login loop
@@ -358,26 +365,27 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
         """
         Constantly fetches and updates the marquee at the bottom of the window
         """
+        global has_exception
         global marquee_text
         global song_marquee_text
 
         def fetch_broadcast_message():
-            """
-            Fetches the broadcast messsage to be marquee'd at the bottom of the screen
-            """
-            try:
-                data = requests.request('GET', 'http://jetsetradio.live/messages/messages.xml').content  # Get the data
-                bs = bs4.BeautifulSoup(data, 'html.parser')  # Parse XML data retrieved from the URL
+                """
+                Fetches the broadcast messsage to be marquee'd at the bottom of the screen
+                """
+                try:
+                    data = requests.request('GET', 'http://jetsetradio.live/messages/messages.xml').content  # Get the data
+                    bs = bs4.BeautifulSoup(data, 'html.parser')  # Parse XML data retrieved from the URL
 
-                msg = bs.find('message').text  # Parse the broadcast message out of the XML data
-                broadcaster_name = bs.find('avatar').text  # Get the broadcaster's name
+                    msg = bs.find('message').text  # Parse the broadcast message out of the XML data
+                    broadcaster_name = bs.find('avatar').text  # Get the broadcaster's name
 
-                if broadcaster_name in broadcaster_names:  # Check that there is a value for the broadcaster avatar id
-                    msg = broadcaster_names[broadcaster_name] + ': ' + msg  # If there is, replace the id with a name
+                    if broadcaster_name in broadcaster_names:  # Check that there is a value for the broadcaster avatar id
+                        msg = broadcaster_names[broadcaster_name] + ': ' + msg  # If there is, replace the id with a name
 
-                return ' ' * 72 + msg  # Append 72 blank spaces to make it truly act like a marquee
-            except requests.ConnectionError:  # If there is an issue retrieving the message, use a blank string
-                return ' ' * 72
+                    return ' ' * 72 + msg  # Append 72 blank spaces to make it truly act like a marquee
+                except requests.ConnectionError:  # If there is an issue retrieving the message, use a blank string
+                    return ' ' * 72
 
         broadcast_message = fetch_broadcast_message()  # The message to be marquee'd at the bottom of the screen
         marquee_offset = 0  # The offset of which the marquee text is currently at
@@ -486,6 +494,7 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
         Constantly updates the current song / plays it back
         """
         global current_song
+        global has_exception
         global playback_progress
 
         while True:
@@ -493,10 +502,14 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
             next_song = songs[random.randrange(len(songs))]  # Get a random song from the list
             play_song(*next_song)  # Play back said song (format [song name, song url])
 
+            if has_exception:
+                break
+
     def write_thread():
         """
         Writes the contents of the chat window to the terminal constantly
         """
+        global has_exception
 
         while True:
             stdscr.clear()  # Clear the window
@@ -599,22 +612,22 @@ except KeyboardInterrupt:
     pass
 except BaseException as e:
     import traceback
-    has_exception = True
+    has_exception = traceback.format_exc()
 
     logfile = open('./errorlog.txt', 'w')  # Create errorlog.txt in the working directory to write the exception to
-    logfile.write(traceback.format_exc())  # Writes the exception traceback to the file...
+    logfile.write(has_exception)  # Writes the exception traceback to the file...
     logfile.close()  # ...and then closes it, saving it
 
     stdscr.clear()
 
-    if has_exception:  # If an exception occurs, print how to get help debugging the client
-        unicurses.beep()  # Attempt to make a beep; may not be possible on Linux without the pcspkr driver loaded
+if has_exception:  # If an exception occurs, print how to get help debugging the client
+    unicurses.beep()  # Attempt to make a beep; may not be possible on Linux without the pcspkr driver loaded
 
-        # Write a message stating how to get help with debugging for those who aren't programmers
-        write('Fatal error occured: please send errorlog.txt to bb via pqlime@gmail.com', 0, 0)
-        write('Press any key to exit.', 0, 1)
-        stdscr.refresh()
+    # Write a message stating how to get help with debugging for those who aren't programmers
+    write('Fatal error occured: please send errorlog.txt to bb via pqlime@gmail.com', 0, 0)
+    write('Press any key to exit.', 0, 1)
+    stdscr.refresh()
 
-        get_key()  # Wait for key
+    get_key()  # Wait for key
 
 unicurses.endwin()  # Returns the terminal to it's original state
