@@ -12,11 +12,15 @@ import bs4
 import unicurses
 from _curses import error as curses_error
 import locale
+import os
 import re
 import requests
 import sys
 import threading
 import time
+
+
+os.chdir(os.path.dirname(os.path.realpath(__file__)))  # Changes working directory to the script's parent directory
 
 
 # Screen config
