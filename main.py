@@ -14,6 +14,7 @@ from _curses import error as curses_error
 import locale
 import re
 import requests
+import sys
 import threading
 import time
 
@@ -68,10 +69,10 @@ def write(line, x, y, effect=0):
 
     Notes:
         We put stdscr.addstr into a variable to check that it doesn't return
-            uniunicurses.ERR. If it does, we can throw an
+            unicurses.ERR. If it does, we can throw an
     """
     try:
-        stdscr.addstr(y, x, line.encode(encoding), effect)  # encode line for unicode support
+        stdscr.addstr(y, x, line, effect)  # Add the given line to coordinates (x, y) with effect 'effect'
     except curses_error:
         pass
 
@@ -83,19 +84,24 @@ def get_key():
     """
 
     try:  # Catch non-blocking errors when attempting to fetch character
-        wch = stdscr.get_wch()
+        if sys.platform == 'win32':
+            wch = unicurses.wgetkey(stdscr)  # wgetkey is for windows support
+        else:
+            wch = stdscr.get_wch()  # get_wch is for linux ( and os x?)
     except curses_error:  # No input error --> return ''; only happens if blocking off
         return ''
     if isinstance(wch, int):  # if the keycode is a byte, it'll return an int which needs to be converted
         if unicurses.keyname(wch):  # check for a valid key descriptor
             return unicurses.keyname(wch).decode('utf-8')
-        else:  # if no valid key descriptor is available, return the character itself
-            return chr(wch)
-    elif isinstance(wch, str):  # already a string; check if KEY_ENTER or KEY_TAB as they are unparsed by keyname(wch)
+        else:  # if no valid key descriptor is available, try using the character in the next conditional
+            wch = chr(wch)
+    if isinstance(wch, str):  # already a string; check if KEY_ENTER or KEY_TAB as they are unparsed by keyname(wch)
         if wch == '\n':  # newline = KEY_ENTER
             return 'KEY_ENTER'
         elif wch == '\t':  # tab = KEY_TAB
             return 'KEY_TAB'
+        elif wch == '\b':  # bs = KEY_BACKSPACE
+            return 'KEY_BACKSPACE'
         else:  # properly formatted, we can return this safely
             return wch
 
@@ -113,34 +119,34 @@ class TextInput(object):
         self.__cursor_pos = 0  # When using write(), it displays the text along with a user cursor.
         self.__char_limit = char_limit  # Max amount of characters writable
 
-    def update(self, char):
+    def update(self, key):
         """
         Adds a character/string to this class's value
 
         Args:
-            char (str): Character/string to write to this class
+            key (str): Character/string to write to this class
         """
         if (not self.__char_limit or (self.__char_limit > 0 and len(self.__value) < self.__char_limit)) and \
-           len(char) == 1:
+           len(key) == 1:
             # If there is not a character limit OR there are less characters than the character limit,
             #   and there is only one character within the char string, add the character to the input
-            self.__value = self.__value[:self.__cursor_pos] + char + self.__value[self.__cursor_pos:]
+            self.__value = self.__value[:self.__cursor_pos] + key + self.__value[self.__cursor_pos:]
             self.__cursor_pos += 1
-        if char == 'KEY_LEFT':  # If left arrow, move cursor pos left 1
+        if key == 'KEY_LEFT':  # If left arrow, move cursor pos left 1
             self.__cursor_pos = max(0, self.__cursor_pos - 1)
-        elif char == 'KEY_RIGHT':  # If right arrow, move cursor pos right 1
+        elif key == 'KEY_RIGHT':  # If right arrow, move cursor pos right 1
             self.__cursor_pos = min(len(self.__value), self.__cursor_pos + 1)
-        elif char == 'KEY_HOME':  # If home key, move cursor to the beginning
+        elif key == 'KEY_HOME':  # If home key, move cursor to the beginning
             self.__cursor_pos = 0
-        elif char == 'KEY_END':  # If end key, move cursor to the end
+        elif key == 'KEY_END':  # If end key, move cursor to the end
             self.__cursor_pos = len(self.__value)
-        elif char == 'KEY_DC':  # If delete key, delete a character in front of the cursor
+        elif key == 'KEY_DC':  # If delete key, delete a character in front of the cursor
             self.__value = self.__value[:self.__cursor_pos] + self.__value[self.__cursor_pos + 1:]
             self.__cursor_pos = min(len(self.__value), self.__cursor_pos)
-        elif char == 'KEY_BACKSPACE':  # If the backspace key, remove the character the cursor is on
+        elif key == 'KEY_BACKSPACE':  # If the backspace key, remove the character the cursor is on
             self.__value = self.__value[:max(0, self.__cursor_pos - 1)] + self.__value[self.__cursor_pos:]
             self.__cursor_pos = max(0, self.__cursor_pos - 1)
-        elif char == 'KEY_ENTER':  # If the key is the enter key, do nothing and return
+        elif key == 'KEY_ENTER':  # If the key is the enter key, do nothing and return
             return
         if self.__char_limit > 0:  # If there is a character limit in place, truncate the current input to stay in it
             self.__value = self.__value[:self.__char_limit]
@@ -173,11 +179,12 @@ class TextInput(object):
             if len(self.__value) == 0:  # If there is no text, just render the cursor
                 write(' ', x, y, unicurses.A_REVERSE)
             else:  # If there is text, render the text alongside the cursor
-                to_write = to_write.encode(encoding)  # Encode to be unicode-safe
+                # to_write = to_write.encode(encoding)  # Encode to be unicode-safe
+
                 cpos = max(0, self.__cursor_pos - 1)  # Calculate the proper position in the text to render w/ cursor
 
                 stdscr.addnstr(y, x, to_write, cpos + 1)  # Write the text before the cursor
-                stdscr.addnstr(y, x + cpos, chr(to_write[cpos]), 1, unicurses.A_REVERSE)  # Write the cursor character
+                stdscr.addnstr(y, x + cpos, to_write[cpos], 1, unicurses.A_REVERSE)  # Write the cursor character
                 stdscr.addstr(y, x + cpos + 1, to_write[cpos + 1:])  # Write all text after the cursor mark
 
 
@@ -257,7 +264,7 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
             """
             try:
                 data = requests.request('GET', 'http://jetsetradio.live/messages/messages.xml').content  # Get the data
-                bs = bs4.BeautifulSoup(data, 'lxml')  # Parse XML data retrieved from the URL
+                bs = bs4.BeautifulSoup(data, 'html.parser')  # Parse XML data retrieved from the URL
 
                 msg = bs.find('message').text  # Parse the broadcast message out of the XML data
                 broadcaster_name = bs.find('avatar').text  # Get the broadcaster's name
@@ -312,7 +319,7 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
                 new_messages = []  # The new messages to replace the old ones with
 
                 data = requests.request('GET', 'http://jetsetradio.live/chat/messages.xml').content  # Retrieve XML data
-                bs = bs4.BeautifulSoup(data, 'lxml')  # and parse it using BeautifulSoup
+                bs = bs4.BeautifulSoup(data, 'html.parser')  # and parse it using BeautifulSoup
 
                 messages = bs.findAll('message')  # Get all XML tags named 'message'
                 messages.reverse()  # We reverse it so that we start from the last message and go forward
