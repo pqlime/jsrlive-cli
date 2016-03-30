@@ -9,7 +9,6 @@ This program is free software. It comes without any warranty, to
 """
 
 import bs4
-import ctypes
 import unicurses
 from _curses import error as curses_error
 import locale
@@ -104,7 +103,7 @@ def get_key():
             return 'KEY_ENTER'
         elif wch == '\t':  # tab = KEY_TAB
             return 'KEY_TAB'
-        elif wch == '\b':  #  bs = KEY_BACKSPACE
+        elif wch == '\b':  # bs = KEY_BACKSPACE
             return 'KEY_BACKSPACE'
         else:  # properly formatted, we can return this safely
             return wch
