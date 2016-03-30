@@ -8,7 +8,6 @@ This program is free software. It comes without any warranty, to
      * http://www.wtfpl.net/ for more details.
 """
 
-
 import bs4
 import unicurses
 from _curses import error as curses_error
