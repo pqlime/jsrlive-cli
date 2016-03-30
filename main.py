@@ -13,11 +13,15 @@ import unicurses
 from _curses import error as curses_error
 import locale
 import os
+import pyaudio
+import random
 import re
 import requests
+import struct
 import sys
 import threading
 import time
+import wave
 
 
 os.chdir(os.path.dirname(os.path.realpath(__file__)))  # Changes working directory to the script's parent directory
@@ -70,10 +74,6 @@ def write(line, x, y, effect=0):
         x (int): X position to write text to
         y (int): Y position to write text to
         effect (int): Curses effect to apply to the text given (A_BLINK, etc.)
-
-    Notes:
-        We put stdscr.addstr into a variable to check that it doesn't return
-            unicurses.ERR. If it does, we can throw an
     """
     try:
         stdscr.addstr(y, x, line, effect)  # Add the given line to coordinates (x, y) with effect 'effect'
@@ -194,13 +194,110 @@ class TextInput(object):
 
 # Audio code
 
-# todo: audio code
+
+# Song fetching code
+
+songs = []  # The master list of songs: Format is [song name, song url]
+
+song_list_data = requests.request('GET', 'http://jetsetradio.live/audioplayer/audio/~list.js').content
+song_name_matches = re.findall(b'"(.*)";', song_list_data)  # Since the list is for a JS exec(), we need to parse it
+
+for song_name in song_name_matches:  # Loop through all matches within the song list
+    song_url = 'http://jetsetradio.live/audioplayer/audio/%s.mp3' % song_name.decode('utf-8')  # Format names into URLs
+    songs.append([song_name.decode('utf-8'), song_url])  # Add the newly formatted song into the internal song list
+
+del song_list_data  # Delete unused variables
+del song_name_matches
+
+
+# Audio playback code
+
+playback_progress = 0  # 0 -> 1; How much audio has been played (for the status bar)
+current_song = 'Loading...'  # The song currently playing
+volume = 5  # The volume to play music at; goes from 0 to 9
+
+
+def download_mp3_to_wav(url):
+    """
+    This function downloads a file given url 'url' and converts it into a wav
+    for playback using pyAudio
+
+    Args:
+        url (str): The URL to download the file from
+    """
+
+    temp = open('./temp.mp3', 'wb')  # Create a temporary file to load into pydub
+
+    try:
+        song_download = requests.request('GET', url).content  # Fetch the song data from the website
+    except requests.ConnectionError:  # Return nothing and delete the tempfile if the song doesn't properly load
+        os.remove('./temp.mp3')
+        return
+
+    temp.write(song_download)  # Write the song data to the temp file
+    temp.close()  # Close the file and save it
+
+    os.system('./ffmpeg -loglevel panic -i %s -acodec pcm_u8 -ar 44100 temp.wav' % temp.name)  # Converts mp3 to wav
+    os.remove(temp.name)  # Remove the mp3 temp file
+
+    new_wave = wave.open('./temp.wav')  # Load the wav file
+    os.remove('./temp.wav')  # And then remove the temporary wave file as well
+
+    return new_wave
+
+
+def play_song(name, url):
+    """
+    Function that plays a song in a new thread
+
+    Args:
+        name (str): Name to display
+        url (str): URL to fetch the mp3 from
+    """
+    global current_song
+    global playback_progress
+
+    current_song = 'Loading...'  # Set the song name to 'Loading...' to notify the user
+    playback_progress = 0
+
+    wav = download_mp3_to_wav(url)  # Download the mp3 file as a wav from jetsetradio.live
+    if not wav:  # If there's no wav returned, don't play it
+        return
+
+    current_song = name  # Set the song name to the new song
+
+    pa = pyaudio.PyAudio()  # Main class of pyAudio; contains the open() function we need for an audio stream
+
+    # Opens an audio stream on the default output device.
+    audio_stream = pa.open(wav.getframerate(), wav.getnchannels(), pa.get_format_from_width(wav.getsampwidth()),
+                           output=True)
+    audio_stream.start_stream()
+
+    buffer_size = audio_stream._frames_per_buffer  # The amount of int16's to read per frame
+
+    while True:
+        data = wav.readframes(buffer_size)  # Read data from wav
+        structure = 'H' * (len(data) // 2)  # Structure for unpacking & packing
+        # Apply the volume to each int16
+        data = struct.pack(structure, *list(map(lambda b: int(b * (volume / 9)), struct.unpack(structure, data))))
+        playback_progress = wav.tell() / wav.getnframes()  # Set percent of song played
+        audio_stream.write(data)  # Write raw data to speakers
+
+        if len(data) // 2 < buffer_size:  # If we're out of data, exit the loop
+            break
+        if current_song != name:  # If the song changed halfway through, stop the stream
+            break
+
+    audio_stream.stop_stream()
+
+    del audio_stream  # Cleanup unused variables
+    del pa
+    del wav
 
 
 # Main code
 
 has_exception = False  # Will be set to true if an exception occurs, in which the user will be notified why this crashed
-threads = []
 
 try:  # Hold all code within a try-catch statement so that errors can be logged upon any crashes
     # Login loop
@@ -255,12 +352,14 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
     chat_messages = []  # The messages to be written with every update. Format = {'user': [username, color], 'msg':msg}
     listeners = 0  # The amount of listeners currently listening to the podcast
     marquee_text = u''  # The marquee to be displayed at the bottom of the screen
+    song_marquee_text = u''  # The marquee to be displayed at the top of the screen
 
     def marquee_thread():
         """
         Constantly fetches and updates the marquee at the bottom of the window
         """
         global marquee_text
+        global song_marquee_text
 
         def fetch_broadcast_message():
             """
@@ -283,12 +382,24 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
         broadcast_message = fetch_broadcast_message()  # The message to be marquee'd at the bottom of the screen
         marquee_offset = 0  # The offset of which the marquee text is currently at
 
+        last_song_name = ''  # The last song name played
+        song_marquee = ' ' * 24 + 'Loading...'  # The song name to be marquee'd at the top of the screen
+        song_marquee_offset = 0  # The offset of which the SONG marquee text is currently at
+
         while True:
             marquee_offset = (marquee_offset + 1) % len(broadcast_message)  # Set the marquee offset over by 1
             marquee_text = broadcast_message[marquee_offset:marquee_offset + 72]  # Offset the marquee text
 
+            song_marquee_offset = (song_marquee_offset + 1) % len(song_marquee)  # Set the song marquee offset over by 1
+            song_marquee_text = song_marquee[song_marquee_offset:song_marquee_offset + 24]
+
             if marquee_offset == 0:  # If the marquee is fully read, check if the server has a new one readied
                 broadcast_message = fetch_broadcast_message()
+
+            if last_song_name != current_song:  # Check to make sure the song name marquee is still valid
+                song_marquee_offset = 0  # Set the offset to 0
+                song_marquee = ' ' * 24 + current_song  # Set the current marquee to be the new song
+                last_song_name = current_song  # ...and set the last song as the new one
 
             time.sleep(0.1)
             if has_exception:
@@ -370,6 +481,18 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
             if has_exception:
                 break
 
+    def song_thread():
+        """
+        Constantly updates the current song / plays it back
+        """
+        global current_song
+        global playback_progress
+
+        while True:
+            time.sleep(1)
+            next_song = songs[random.randrange(len(songs))]  # Get a random song from the list
+            play_song(*next_song)  # Play back said song (format [song name, song url])
+
     def write_thread():
         """
         Writes the contents of the chat window to the terminal constantly
@@ -380,7 +503,10 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
 
             write(chat_text, 0, 0)  # Write the base of the chat window
             write(marquee_text, 6, 21)  # Write the marquee text to the window
+            write(song_marquee_text, 21, 2)  # Write the song marquee text to the window
+            write(str(volume), 51, 2)  # Write the current volume to the window
             write(str(listeners).zfill(4), 61, 1)  # Write the amount of listeners to the window
+            write('#' * int(20 * playback_progress), 56, 2)  # Write the percentage of the song completed
             chat_input.write(2, 19, True)  # Write the chatbox to the window
 
             current_message = 0  # Keep count of what message we're on
@@ -404,18 +530,40 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
     thread_1 = threading.Thread(target=marquee_thread, daemon=True)
     thread_2 = threading.Thread(target=listener_thread, daemon=True)
     thread_3 = threading.Thread(target=chat_thread, daemon=True)
-    thread_4 = threading.Thread(target=write_thread, daemon=True)
+    thread_4 = threading.Thread(target=song_thread, daemon=True)
+    thread_5 = threading.Thread(target=write_thread, daemon=True)
 
     # Run threads
     thread_1.start()
     thread_2.start()
     thread_3.start()
     thread_4.start()
+    thread_5.start()
 
     # Input loop; not a thread so that the program will run properly
 
-    def parse_commands(msg):  # todo: add user commands
-        pass
+    def parse_commands(msg):
+        """
+        Parses commands sent by the user
+
+        Args:
+            msg (str): The command string to execute
+        """
+
+        command = msg.split(' ')[0].lower()  # Get the command
+        command_args = msg.split(' ')[1:]  # Get all the args along with the command name
+
+        if command == 'setvolume':  # Volume change command
+            try:  # Try and parse the argument as a volume and then set said volume
+                global volume
+
+                volume = max(0, min(9, int(command_args[0])))  # Clamp between 0 and 9
+            except TypeError:
+                pass
+        elif command == 'skipsong':  # Skip the current song
+            global current_song
+
+            current_song = 'Loading...'  # Since the playback code stops if the current_song c
 
     while True:
         try:
