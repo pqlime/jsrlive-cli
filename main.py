@@ -12,7 +12,6 @@ import bs4
 import unicurses
 from _curses import error as curses_error
 import locale
-import os
 import re
 import requests
 import sys
