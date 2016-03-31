@@ -11,7 +11,7 @@ incorporating the music from the website version into the CLI app. Unicurses
 is required because the curses library only works under Linux, and I don't
 want to leave any funk soul brothers out of the fun, do I?
 
-(Both the code in this program and the libraries are for Python 3)
+(Both the code in this program and the libraries are for Python 3.)
 
 Dependencies:
  * BeautifulSoup4
