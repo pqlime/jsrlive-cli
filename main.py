@@ -653,9 +653,11 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
         if has_exception:
             break
 
-except KeyboardInterrupt:
+except KeyboardInterrupt:  # CTRL+C
     pass
-except:  # Just break on KeyboardInterrput as it's not actually an exception
+except SystemExit:  # /exit
+    pass
+except:  # unexpected shutdown
     register_exception()
 
 if has_exception:  # If an exception occurs, print how to get help debugging the client
