@@ -600,17 +600,17 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
 
         if command == 'exit':  # Quit the app
             current_song = 'None'  # Stop song
-			stdscr.clear()  # Clear screen before exit
-			stdscr.refresh()  # Refresh to load cleared screen
-			
+            stdscr.clear()  # Clear screen before exit
+            stdscr.refresh()  # Refresh to load cleared screen
+            
             time.sleep(0.2)  # Give time for song to stop
 
             try:
                 os.remove('./temp.wav')  # Try to delete tempfile
             except OSError:
                 pass
-				
-			unicurses.endwin()  # Reset terminal back to original state
+                
+            unicurses.endwin()  # Reset terminal back to original state
             sys.exit()  # Exit the application
         elif command == 'setvolume':  # Volume change command
             try:  # Try and parse the argument as a volume and then set said volume
@@ -666,7 +666,7 @@ except:  # unexpected shutdown
 
 if has_exception:  # If an exception occurs, print how to get help debugging the client
 
-	current_song = 'None'  # Stop the current song
+    current_song = 'None'  # Stop the current song
 
     logfile = open('./errorlog.txt', 'w')  # Create errorlog.txt in the working directory to write the exception to
     logfile.write(error_msg)  # Writes the exception traceback to the file...
@@ -682,6 +682,6 @@ if has_exception:  # If an exception occurs, print how to get help debugging the
     stdscr.refresh()
 
     get_key()  # Wait for key
-	os.remove('./temp.wav')  # Remove the temporary song file
+    os.remove('./temp.wav')  # Remove the temporary song file
 
 unicurses.endwin()  # Returns the terminal to it's original state
