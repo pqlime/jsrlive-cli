@@ -9,7 +9,6 @@ This program is free software. It comes without any warranty, to
 """
 
 import bs4
-import unicurses
 from _curses import error as curses_error
 import locale
 import os
@@ -21,6 +20,7 @@ import struct
 import sys
 import threading
 import time
+import unicurses
 import wave
 
 
@@ -42,6 +42,8 @@ stdscr.nodelay(False)  # enables input blocking to keep CPU down
 locale.setlocale(locale.LC_ALL, '')
 encoding = locale.getpreferredencoding()  # get the preferred system encoding for unicode support
 
+if sys.platform == 'win32':  # Windows: set codepage to 65001 for unicode support
+    os.system('chcp 65001')
 
 # Settings
 
@@ -192,9 +194,6 @@ class TextInput(object):
                 stdscr.addstr(y, x + cpos + 1, to_write[cpos + 1:])  # Write all text after the cursor mark
 
 
-# Audio code
-
-
 # Tracklist fetching code
 
 songs = []  # The master list of songs: Format is [song name, song url]
@@ -225,8 +224,11 @@ def download_mp3_to_wav(url):
     Args:
         url (str): The URL to download the file from
     """
-
-    temp = open('./temp.mp3', 'wb')  # Create a temporary file to load into pydub
+    
+    try:  # We want to remove the old temp.wav file (Windows can't remove immediately because it's still in use by us)
+        os.remove('./temp.wav')
+    except OSError:  # It's still in use??? (This should never happen)
+        pass
 
     try:
         song_download = requests.request('GET', url).content  # Fetch the song data from the website
@@ -234,14 +236,16 @@ def download_mp3_to_wav(url):
         os.remove('./temp.mp3')
         return
 
+    temp = open('./temp.mp3', 'wb')  # Create a temporary file to load into ffmpeg
     temp.write(song_download)  # Write the song data to the temp file
     temp.close()  # Close the file and save it
 
-    os.system('./ffmpeg -i %s -acodec pcm_u8 -ar 44100 ./temp.wav' % temp.name)  # Converts mp3 to wav
+    os.system('ffmpeg -loglevel panic -i %s -acodec pcm_u8 -ar 44100 temp.wav' % temp.name)  # Converts mp3 to wav
+    while not os.path.exists('./temp.wav'):  # Wait for the new wav file to exist just in case
+        time.sleep(1)
     os.remove(temp.name)  # Remove the mp3 temp file
-
+    
     new_wave = wave.open('./temp.wav')  # Load the wav file
-    os.remove('./temp.wav')  # And then remove the temporary wave file as well
 
     return new_wave
 
@@ -269,17 +273,22 @@ def play_song(name, url):
     pa = pyaudio.PyAudio()  # Main class of pyAudio; contains the open() function we need for an audio stream
 
     # Opens an audio stream on the default output device.
-    audio_stream = pa.open(wav.getframerate(), wav.getnchannels(), pa.get_format_from_width(wav.getsampwidth()),
-                           output=True)
+    # Explained: We're using 1/2th the framerate because we're going from Int16 to Float32; this change
+    # requires us to get twice the amount of data, hence leaving us with twice the amount of bytes.
+    # We convert from Int16 to Float32 to prevent byte overflow, which results in garbled (and scary) static.
+    audio_stream = pa.open(wav.getframerate() // 2, wav.getnchannels(), pyaudio.paFloat32, output=True)
     audio_stream.start_stream()
 
     buffer_size = audio_stream._frames_per_buffer  # The amount of int16's to read per frame
 
     while True:
-        data = wav.readframes(buffer_size)  # Read data from wav
-        structure = 'H' * (len(data) // 2)  # Structure for unpacking & packing
-        # Apply the volume to each int16
-        data = struct.pack(structure, *list(map(lambda b: int(b * (volume / 9)), struct.unpack(structure, data))))
+        data = wav.readframes(buffer_size * 2)  # Read data from wav
+        if isinstance(data, str):  # Check typing to prevent errors
+            data = data.encode('utf-8')
+
+        # Take each byte, divide by 0x7FFF to get a float, and then multiply that by the volume constant
+        data = struct.pack('f' * (len(data) // 2), *list(map(lambda b: b / 65535 * (volume / 9),
+                           struct.unpack('H' * (len(data) // 2), data))))
         playback_progress = wav.tell() / wav.getnframes()  # Set percent of song played
         audio_stream.write(data)  # Write raw data to speakers
 
@@ -297,13 +306,21 @@ def play_song(name, url):
 
 # Main code
 
-error_msg = ''
+error_msg = ''  # If it's a thread exception, it'll write it to here
 has_exception = False  # Will be set to true if an exception occurs, in which the user will be notified why this crashed
 
-def get_exception():
+
+def register_exception():
     """
-    Fetches an exception message, regardless if a thread or not.
+    Sets has_exception to True and the error_msg to the traceback
     """
+    import traceback
+
+    global error_msg
+    global has_exception
+
+    error_msg = traceback.format_exc()
+    has_exception = True
 
 
 try:  # Hold all code within a try-catch statement so that errors can be logged upon any crashes
@@ -374,14 +391,14 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
                 Fetches the broadcast messsage to be marquee'd at the bottom of the screen
                 """
                 try:
-                    data = requests.request('GET', 'http://jetsetradio.live/messages/messages.xml').content  # Get the data
+                    data = requests.request('GET', 'http://jetsetradio.live/messages/messages.xml').content  # Get data
                     bs = bs4.BeautifulSoup(data, 'html.parser')  # Parse XML data retrieved from the URL
 
                     msg = bs.find('message').text  # Parse the broadcast message out of the XML data
                     broadcaster_name = bs.find('avatar').text  # Get the broadcaster's name
 
-                    if broadcaster_name in broadcaster_names:  # Check that there is a value for the broadcaster avatar id
-                        msg = broadcaster_names[broadcaster_name] + ': ' + msg  # If there is, replace the id with a name
+                    if broadcaster_name in broadcaster_names:  # Check that there's name for the broadcaster avatar id
+                        msg = broadcaster_names[broadcaster_name] + ': ' + msg  # Replace the id with a name
 
                     return ' ' * 72 + msg  # Append 72 blank spaces to make it truly act like a marquee
                 except requests.ConnectionError:  # If there is an issue retrieving the message, use a blank string
@@ -394,24 +411,27 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
         song_marquee = ' ' * 24 + 'Loading...'  # The song name to be marquee'd at the top of the screen
         song_marquee_offset = 0  # The offset of which the SONG marquee text is currently at
 
-        while True:
-            marquee_offset = (marquee_offset + 1) % len(broadcast_message)  # Set the marquee offset over by 1
-            marquee_text = broadcast_message[marquee_offset:marquee_offset + 72]  # Offset the marquee text
+        try:
+            while True:
+                marquee_offset = (marquee_offset + 1) % len(broadcast_message)  # Set the marquee over by 1
+                marquee_text = broadcast_message[marquee_offset:marquee_offset + 72]  # Offset marquee text
 
-            song_marquee_offset = (song_marquee_offset + 1) % len(song_marquee)  # Set the song marquee offset over by 1
-            song_marquee_text = song_marquee[song_marquee_offset:song_marquee_offset + 24]
+                song_marquee_offset = (song_marquee_offset + 1) % len(song_marquee)  # Set the song marquee over by 1
+                song_marquee_text = song_marquee[song_marquee_offset:song_marquee_offset + 24]  # Offset marquee text
 
-            if marquee_offset == 0:  # If the marquee is fully read, check if the server has a new one readied
-                broadcast_message = fetch_broadcast_message()
+                if marquee_offset == 0:  # If the marquee is fully read, check if the server has a new one readied
+                    broadcast_message = fetch_broadcast_message()
 
-            if last_song_name != current_song:  # Check to make sure the song name marquee is still valid
-                song_marquee_offset = 0  # Set the offset to 0
-                song_marquee = ' ' * 24 + current_song  # Set the current marquee to be the new song
-                last_song_name = current_song  # ...and set the last song as the new one
+                if last_song_name != current_song:  # Check to make sure the song name marquee is still valid
+                    song_marquee_offset = 0  # Set the offset to 0
+                    song_marquee = ' ' * 24 + current_song  # Set the current marquee to be the new song
+                    last_song_name = current_song  # ...and set the last song as the new one
 
-            time.sleep(0.1)
-            if has_exception:
-                break
+                time.sleep(0.1)
+                if has_exception:
+                    break
+        except:
+            register_exception()
 
     def listener_thread():
         """
@@ -419,17 +439,20 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
         """
         global listeners
 
-        while True:
-            try:
-                # Retrieve the listener XML page
-                data = requests.request('GET', 'http://jetsetradio.live/counter/listeners.xml').content.decode('utf-8')
-                listeners = data.count('<user>')  # The amount of listeners = <user> tags, so we can use count()
-            except requests.ConnectionError:  # Don't do anything when errors occur so as not to reset the counter
-                pass
+        try:
+            while True:
+                try:
+                    # Retrieve the listener XML page
+                    data = requests.request('GET', 'http://jetsetradio.live/counter/listeners.xml').content
+                    listeners = data.count(b'<user>')  # The amount of listeners = <user> tags, so we can use count()
+                except requests.ConnectionError:  # Don't do anything when errors occur so as not to reset the counter
+                    pass
 
-            time.sleep(1)
-            if has_exception:
-                break
+                time.sleep(1)
+                if has_exception:
+                    break
+        except:
+            register_exception()
 
     def chat_thread():
         """
@@ -437,57 +460,60 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
         """
         global chat_messages
 
-        while True:
-            try:
-                new_messages = []  # The new messages to replace the old ones with
+        try:
+            while True:
+                try:
+                    new_messages = []  # The new messages to replace the old ones with
 
-                data = requests.request('GET', 'http://jetsetradio.live/chat/messages.xml').content  # Retrieve XML data
-                bs = bs4.BeautifulSoup(data, 'html.parser')  # and parse it using BeautifulSoup
+                    data = requests.request('GET', 'http://jetsetradio.live/chat/messages.xml').content  # Retrieve data
+                    bs = bs4.BeautifulSoup(data, 'html.parser')  # and parse it using BeautifulSoup
 
-                messages = bs.findAll('message')  # Get all XML tags named 'message'
-                messages.reverse()  # We reverse it so that we start from the last message and go forward
+                    messages = bs.findAll('message')  # Get all XML tags named 'message'
+                    messages.reverse()  # We reverse it so that we start from the last message and go forward
 
-                lines_parsed = 0  # Keep track of how many lines we parse so we can stop at 13
-                for message in messages:
-                    user = message.find('username').get_text()  # Retrieve username from message
-                    msg = message.find('text').get_text()  # Retrieve actual message from message
+                    lines_parsed = 0  # Keep track of how many lines we parse so we can stop at 13
+                    for message in messages:
+                        user = message.find('username').get_text()  # Retrieve username from message
+                        msg = message.find('text').get_text()  # Retrieve actual message from message
 
-                    user_color = default_color  # The color of the user's name
-                    if user == 'DJProfessorK':  # If the user is the Professor himself, change color to yellow
-                        user_color = djpk_color
-                    elif user.find('</font>') != -1:  # If the user is registered, change color to cyan
-                        user_color = registered_color
+                        user_color = default_color  # The color of the user's name
+                        if user == 'DJProfessorK':  # If the user is the Professor himself, change color to yellow
+                            user_color = djpk_color
+                        elif user.find('</font>') != -1:  # If the user is registered, change color to cyan
+                            user_color = registered_color
 
-                    user = re.sub('<[^<]+?>', '', user)  # Remove HTML tags from username and message
-                    msg = re.sub('<[^<]+?>', '', msg)
+                        user = re.sub('<[^<]+?>', '', user)  # Remove HTML tags from username and message
+                        msg = re.sub('<[^<]+?>', '', msg)
 
-                    msg = user + ': ' + msg  # Add username + the colon to the message
-                    # Create message chunks of size 58
-                    chunks = [msg[chunk:chunk + 58] for chunk in range(0, len(msg), 58)]
-                    chunks.reverse()  # As from before, reverse it so we go from the back to the front
+                        msg = user + ': ' + msg  # Add username + the colon to the message
+                        # Create message chunks of size 58
+                        chunks = [msg[chunk:chunk + 58] for chunk in range(0, len(msg), 58)]
+                        chunks.reverse()  # As from before, reverse it so we go from the back to the front
 
-                    current_line = 0  # Keep track so we can add the username if it's the correct line
-                    for chunk in chunks:
-                        message_data = {'user': None, 'msg': chunk}  # Create dictionary to insert into chat_messages
+                        current_line = 0  # Keep track so we can add the username if it's the correct line
+                        for chunk in chunks:
+                            message_data = {'user': None, 'msg': chunk}  # Create dict to insert into chat_messages
 
-                        current_line += 1
-                        if current_line == len(chunks):  # If the line contains the username, add it to the msg data
-                            message_data['user'] = [user, user_color]
+                            current_line += 1
+                            if current_line == len(chunks):  # If the line contains the username, add it to the msg data
+                                message_data['user'] = [user, user_color]
 
-                        new_messages.append(message_data)
+                            new_messages.append(message_data)
 
-                        lines_parsed += 1
-                        if lines_parsed == 13:  # Stop parsing messages at line 13
-                            break
+                            lines_parsed += 1
+                            if lines_parsed == 13:  # Stop parsing messages at line 13
+                                break
 
-                    chat_messages = new_messages  # replace the old messages with the new ones
-            except requests.ConnectionError:  # Don't delete messages if messages can't be retrieved
-                pass
+                        chat_messages = new_messages  # replace the old messages with the new ones
+                except requests.ConnectionError:  # Don't delete messages if messages can't be retrieved
+                    pass
 
-            time.sleep(0.5)
+                time.sleep(0.5)
 
-            if has_exception:
-                break
+                if has_exception:
+                    break
+        except:
+            register_exception()
 
     def song_thread():
         """
@@ -497,13 +523,16 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
         global has_exception
         global playback_progress
 
-        while True:
-            time.sleep(1)
-            next_song = songs[random.randrange(len(songs))]  # Get a random song from the list
-            play_song(*next_song)  # Play back said song (format [song name, song url])
+        try:
+            while True:
+                time.sleep(1)
+                next_song = songs[random.randrange(len(songs))]  # Get a random song from the list
+                play_song(*next_song)  # Play back said song (format [song name, song url])
 
-            if has_exception:
-                break
+                if has_exception:
+                    break
+        except:
+            register_exception()
 
     def write_thread():
         """
@@ -511,33 +540,36 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
         """
         global has_exception
 
-        while True:
-            stdscr.clear()  # Clear the window
+        try:
+            while True:
+                stdscr.clear()  # Clear the window
 
-            write(chat_text, 0, 0)  # Write the base of the chat window
-            write(marquee_text, 6, 21)  # Write the marquee text to the window
-            write(song_marquee_text, 21, 2)  # Write the song marquee text to the window
-            write(str(volume), 51, 2)  # Write the current volume to the window
-            write(str(listeners).zfill(4), 61, 1)  # Write the amount of listeners to the window
-            write('#' * int(20 * playback_progress), 56, 2)  # Write the percentage of the song completed
-            chat_input.write(2, 19, True)  # Write the chatbox to the window
+                write(chat_text, 0, 0)  # Write the base of the chat window
+                write(marquee_text, 6, 21)  # Write the marquee text to the window
+                write(song_marquee_text, 21, 2)  # Write the song marquee text to the window
+                write(str(volume), 51, 2)  # Write the current volume to the window
+                write(str(listeners).zfill(4), 61, 1)  # Write the amount of listeners to the window
+                write('#' * int(20 * playback_progress), 56, 2)  # Write the percentage of the song completed
+                chat_input.write(2, 19, True)  # Write the chatbox to the window
 
-            current_message = 0  # Keep count of what message we're on
-            for message in chat_messages:  # Format = {'user': (None | [username, color]), 'msg': msg}
-                write(message['msg'], 1, 17 - current_message)  # Write the message to the screen
+                current_message = 0  # Keep count of what message we're on
+                for message in chat_messages:  # Format = {'user': (None | [username, color]), 'msg': msg}
+                    write(message['msg'], 1, 17 - current_message)  # Write the message to the screen
 
-                if message['user'] is not None:  # If the username is in the message, write it with it's color
-                    write(message['user'][0], 1, 17 - current_message, message['user'][1])
+                    if message['user'] is not None:  # If the username is in the message, write it with it's color
+                        write(message['user'][0], 1, 17 - current_message, message['user'][1])
 
-                current_message += 1
-                if current_message == 13:
+                    current_message += 1
+                    if current_message == 13:
+                        break
+
+                stdscr.refresh()  # Refresh the window, writing contents to screen
+
+                time.sleep(0.1)
+                if has_exception:
                     break
-
-            stdscr.refresh()  # Refresh the window, writing contents to screen
-
-            time.sleep(0.05)
-            if has_exception:
-                break
+        except:
+            register_exception()
 
     # Create threads
     thread_1 = threading.Thread(target=marquee_thread, daemon=True)
@@ -566,17 +598,27 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
         command = msg.split(' ')[0].lower()  # Get the command
         command_args = msg.split(' ')[1:]  # Get all the args along with the command name
 
-        if command == 'setvolume':  # Volume change command
+        if command == 'exit':  # Quit the app
+            current_song = 'None'  # Stop song
+            time.sleep(0.4)
+
+            try:
+                os.remove('./temp.wav')  # Try to delete tempfile
+            except OSError:
+                pass
+
+            sys.exit()  # Exit the application
+        elif command == 'setvolume':  # Volume change command
             try:  # Try and parse the argument as a volume and then set said volume
                 global volume
 
                 volume = max(0, min(9, int(command_args[0])))  # Clamp between 0 and 9
-            except TypeError:
+            except (TypeError, IndexError):
                 pass
         elif command == 'skipsong':  # Skip the current song
             global current_song
 
-            current_song = 'Loading...'  # Since the playback code stops if the current_song c
+            current_song = 'Loading...'  # Since the playback code stops if the current_song's changed, this works
 
     while True:
         try:
@@ -602,6 +644,9 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
                     chat_input.update(' ')
             else:  # Standard character; add to the current input
                 chat_input.update(char)
+
+            chat_input.write(2, 19, True)  # Write the chatbox to the window
+            stdscr.refresh()  # Refresh the contents of the window to draw the chat input box
         except curses_error:  # Prevent crashes simply because of input glitches
             pass
 
@@ -610,17 +655,17 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
 
 except KeyboardInterrupt:
     pass
-except BaseException as e:
-    import traceback
-    has_exception = traceback.format_exc()
-
-    logfile = open('./errorlog.txt', 'w')  # Create errorlog.txt in the working directory to write the exception to
-    logfile.write(has_exception)  # Writes the exception traceback to the file...
-    logfile.close()  # ...and then closes it, saving it
-
-    stdscr.clear()
+except:  # Just break on KeyboardInterrput as it's not actually an exception
+    register_exception()
 
 if has_exception:  # If an exception occurs, print how to get help debugging the client
+
+    logfile = open('./errorlog.txt', 'w')  # Create errorlog.txt in the working directory to write the exception to
+    logfile.write(error_msg)  # Writes the exception traceback to the file...
+    logfile.close()  # ...and then closes it, saving it
+
+    stdscr.clear()  # Clear the screen to print the error message
+
     unicurses.beep()  # Attempt to make a beep; may not be possible on Linux without the pcspkr driver loaded
 
     # Write a message stating how to get help with debugging for those who aren't programmers
