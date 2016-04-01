@@ -637,16 +637,9 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
 
             current_song = 'Loading...'  # Since the playback code stops if the current_song's changed, this works
 
-    a = open('./debuglog.txt', 'ab')
-
     while True:
         try:
             char = get_key()  # Fetch the key to input into the chat textbox
-            try:
-                a.write(char)
-            except:
-                a.write(char.encode('utf-8'))
-            a.flush()
 
             if char == 'KEY_ENTER':  # Send button; once pressed send the input to the server
                 if chat_input.value.replace(' ', '') != '':  # Prevent sending blank messages
@@ -675,8 +668,6 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
 
         if has_exception:
             break
-
-    a.close()
 
 except KeyboardInterrupt:  # CTRL+C
     pass
