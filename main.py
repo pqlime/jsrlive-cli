@@ -378,6 +378,40 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
     marquee_text = u''  # The marquee to be displayed at the bottom of the screen
     song_marquee_text = u''  # The marquee to be displayed at the top of the screen
 
+    def draw():
+        """
+        Function that draws everything to the screen in one fell swoop.
+
+        Notes:
+            This used to be built in to the write thread, but since the write
+            thread has been throttled to keep CPU and I/O low, we need to have
+            this at the top so we can call it from both the text input loop as
+            well as the write thread.
+        """
+
+        stdscr.clear()  # Clear the window
+
+        write(chat_text, 0, 0)  # Write the base of the chat window
+        write(marquee_text, 6, 21)  # Write the marquee text to the window
+        write(song_marquee_text, 21, 2)  # Write the song marquee text to the window
+        write(str(volume), 51, 2)  # Write the current volume to the window
+        write(str(listeners).zfill(4), 61, 1)  # Write the amount of listeners to the window
+        write('#' * int(20 * playback_progress), 56, 2)  # Write the percentage of the song completed
+        chat_input.write(2, 19, True)  # Write the chatbox to the window
+
+        current_message = 0  # Keep count of what message we're on
+        for message in chat_messages:  # Format = {'user': (None | [username, color]), 'msg': msg}
+            write(message['msg'], 1, 17 - current_message)  # Write the message to the screen
+
+            if message['user'] is not None:  # If the username is in the message, write it with it's color
+                write(message['user'][0], 1, 17 - current_message, message['user'][1])
+
+            current_message += 1
+            if current_message == 13:
+                break
+
+        stdscr.refresh()  # Refresh the window, writing contents to screen
+
     def marquee_thread():
         """
         Constantly fetches and updates the marquee at the bottom of the window
@@ -542,28 +576,7 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
 
         try:
             while True:
-                stdscr.clear()  # Clear the window
-
-                write(chat_text, 0, 0)  # Write the base of the chat window
-                write(marquee_text, 6, 21)  # Write the marquee text to the window
-                write(song_marquee_text, 21, 2)  # Write the song marquee text to the window
-                write(str(volume), 51, 2)  # Write the current volume to the window
-                write(str(listeners).zfill(4), 61, 1)  # Write the amount of listeners to the window
-                write('#' * int(20 * playback_progress), 56, 2)  # Write the percentage of the song completed
-                chat_input.write(2, 19, True)  # Write the chatbox to the window
-
-                current_message = 0  # Keep count of what message we're on
-                for message in chat_messages:  # Format = {'user': (None | [username, color]), 'msg': msg}
-                    write(message['msg'], 1, 17 - current_message)  # Write the message to the screen
-
-                    if message['user'] is not None:  # If the username is in the message, write it with it's color
-                        write(message['user'][0], 1, 17 - current_message, message['user'][1])
-
-                    current_message += 1
-                    if current_message == 13:
-                        break
-
-                stdscr.refresh()  # Refresh the window, writing contents to screen
+                draw()
 
                 time.sleep(0.1)
                 if has_exception:
@@ -643,14 +656,13 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
                             pass
 
                     chat_input.value = ''  # Delete the previous message after sending
-            elif char == 'KEY_TAB':  # Replace \t with 4 spaces to prevent input glitches
+            elif char == 'KEY_TAB':  # Replace tabs with 4 spaces to prevent input glitches
                 for i in range(4):
                     chat_input.update(' ')
             else:  # Standard character; add to the current input
                 chat_input.update(char)
 
-            chat_input.write(2, 19, True)  # Write the chatbox to the window
-            stdscr.refresh()  # Refresh the contents of the window to draw the chat input box
+            draw()  # Draw the text input instantly
         except curses_error:  # Prevent crashes simply because of input glitches
             pass
 
