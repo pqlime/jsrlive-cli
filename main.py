@@ -378,6 +378,40 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
     marquee_text = u''  # The marquee to be displayed at the bottom of the screen
     song_marquee_text = u''  # The marquee to be displayed at the top of the screen
 
+    def draw():
+        """
+        Function that draws everything to the screen in one fell swoop.
+
+        Notes:
+            This used to be built in to the write thread, but since the write
+            thread has been throttled to keep CPU and I/O low, we need to have
+            this at the top so we can call it from both the text input loop as
+            well as the write thread.
+        """
+
+        stdscr.clear()  # Clear the window
+
+        write(chat_text, 0, 0)  # Write the base of the chat window
+        write(marquee_text, 6, 21)  # Write the marquee text to the window
+        write(song_marquee_text, 21, 2)  # Write the song marquee text to the window
+        write(str(volume), 51, 2)  # Write the current volume to the window
+        write(str(listeners).zfill(4), 61, 1)  # Write the amount of listeners to the window
+        write('#' * int(20 * playback_progress), 56, 2)  # Write the percentage of the song completed
+        chat_input.write(2, 19, True)  # Write the chatbox to the window
+
+        current_message = 0  # Keep count of what message we're on
+        for message in chat_messages:  # Format = {'user': (None | [username, color]), 'msg': msg}
+            write(message['msg'], 1, 17 - current_message)  # Write the message to the screen
+
+            if message['user'] is not None:  # If the username is in the message, write it with it's color
+                write(message['user'][0], 1, 17 - current_message, message['user'][1])
+
+            current_message += 1
+            if current_message == 13:
+                break
+
+        stdscr.refresh()  # Refresh the window, writing contents to screen
+
     def marquee_thread():
         """
         Constantly fetches and updates the marquee at the bottom of the window
@@ -542,28 +576,7 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
 
         try:
             while True:
-                stdscr.clear()  # Clear the window
-
-                write(chat_text, 0, 0)  # Write the base of the chat window
-                write(marquee_text, 6, 21)  # Write the marquee text to the window
-                write(song_marquee_text, 21, 2)  # Write the song marquee text to the window
-                write(str(volume), 51, 2)  # Write the current volume to the window
-                write(str(listeners).zfill(4), 61, 1)  # Write the amount of listeners to the window
-                write('#' * int(20 * playback_progress), 56, 2)  # Write the percentage of the song completed
-                chat_input.write(2, 19, True)  # Write the chatbox to the window
-
-                current_message = 0  # Keep count of what message we're on
-                for message in chat_messages:  # Format = {'user': (None | [username, color]), 'msg': msg}
-                    write(message['msg'], 1, 17 - current_message)  # Write the message to the screen
-
-                    if message['user'] is not None:  # If the username is in the message, write it with it's color
-                        write(message['user'][0], 1, 17 - current_message, message['user'][1])
-
-                    current_message += 1
-                    if current_message == 13:
-                        break
-
-                stdscr.refresh()  # Refresh the window, writing contents to screen
+                draw()
 
                 time.sleep(0.1)
                 if has_exception:
@@ -600,13 +613,17 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
 
         if command == 'exit':  # Quit the app
             current_song = 'None'  # Stop song
-            time.sleep(0.4)
+            stdscr.clear()  # Clear screen before exit
+            stdscr.refresh()  # Refresh to load cleared screen
+            
+            time.sleep(0.2)  # Give time for song to stop
 
             try:
                 os.remove('./temp.wav')  # Try to delete tempfile
             except OSError:
                 pass
-
+                
+            unicurses.endwin()  # Reset terminal back to original state
             sys.exit()  # Exit the application
         elif command == 'setvolume':  # Volume change command
             try:  # Try and parse the argument as a volume and then set said volume
@@ -620,9 +637,16 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
 
             current_song = 'Loading...'  # Since the playback code stops if the current_song's changed, this works
 
+    a = open('./debuglog.txt', 'ab')
+
     while True:
         try:
             char = get_key()  # Fetch the key to input into the chat textbox
+            try:
+                a.write(char)
+            except:
+                a.write(char.encode('utf-8'))
+            a.flush()
 
             if char == 'KEY_ENTER':  # Send button; once pressed send the input to the server
                 if chat_input.value.replace(' ', '') != '':  # Prevent sending blank messages
@@ -645,13 +669,14 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
             else:  # Standard character; add to the current input
                 chat_input.update(char)
 
-            chat_input.write(2, 19, True)  # Write the chatbox to the window
-            stdscr.refresh()  # Refresh the contents of the window to draw the chat input box
+            draw()  # Draw the text input instantly
         except curses_error:  # Prevent crashes simply because of input glitches
             pass
 
         if has_exception:
             break
+
+    a.close()
 
 except KeyboardInterrupt:  # CTRL+C
     pass
@@ -661,6 +686,8 @@ except:  # unexpected shutdown
     register_exception()
 
 if has_exception:  # If an exception occurs, print how to get help debugging the client
+
+    current_song = 'None'  # Stop the current song
 
     logfile = open('./errorlog.txt', 'w')  # Create errorlog.txt in the working directory to write the exception to
     logfile.write(error_msg)  # Writes the exception traceback to the file...
@@ -676,5 +703,6 @@ if has_exception:  # If an exception occurs, print how to get help debugging the
     stdscr.refresh()
 
     get_key()  # Wait for key
+    os.remove('./temp.wav')  # Remove the temporary song file
 
 unicurses.endwin()  # Returns the terminal to it's original state
