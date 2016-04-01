@@ -663,7 +663,7 @@ try:  # Hold all code within a try-catch statement so that errors can be logged 
                             pass
 
                     chat_input.value = ''  # Delete the previous message after sending
-            elif char == 'KEY_TAB':  # Replace \t with 4 spaces to prevent input glitches
+            elif char == 'KEY_TAB':  # Replace tabs with 4 spaces to prevent input glitches
                 for i in range(4):
                     chat_input.update(' ')
             else:  # Standard character; add to the current input
