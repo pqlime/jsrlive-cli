@@ -1,5 +1,6 @@
 Jet Set Radio Live (jetsetradio.live) CLI Chat Application
 =
+DISCLAIMER: THIS IS THE DEV BRANCH. NOTHING HERE IS **GUARANTEED** TO WORK
 
 Python library dependencies
 -
